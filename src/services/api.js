@@ -1,5 +1,5 @@
 // Lớp giao tiếp với vi điều khiển ESP32 / ESP8266 qua HTTP REST.
-// Firmware mẫu: ../arduino/SmartOffice_ESP32/SmartOffice_ESP32.ino
+// Firmware mẫu (thư mục gốc dự án): arduino/SmartOffice_ESP32/SmartOffice_ESP32.ino
 //
 //   GET  {baseUrl}/api/status            -> { ok, name, devices: [{ id, on, brightness, speed, locked, position }] }
 //   GET  {baseUrl}/api/sensors           -> { temperature, humidity, gas, light, co2, motion }

@@ -42,6 +42,10 @@ src/
   services/     # api.js: gọi REST API của ESP32 và sinh dữ liệu mô phỏng
   data/         # Dữ liệu mẫu
   theme/        # Màu sắc, thông tin loại thiết bị
+  utils/        # Phân quyền, quy tắc tự động, thời gian/đơn vị nhiệt độ
+arduino/
+  SmartOffice_ESP32/   # Firmware ESP32 thật (HTTP REST, RC522, MH-Z19)
+  SmartOffice_Wokwi/   # Mạch mô phỏng Wokwi (MQTT): sketch.ino, diagram.json, libraries.txt
 ```
 
 Dữ liệu (tài khoản, thiết bị, phòng, quy tắc, lịch hẹn giờ, lịch họp, chấm công, thông báo, cài đặt) được lưu bằng AsyncStorage nên vẫn còn sau khi tắt app.
@@ -64,7 +68,7 @@ Phân quyền được kiểm tra tập trung trong `OfficeContext` / `AuthConte
 
 ## Kết nối phần cứng ESP32
 
-1. Mở `../arduino/SmartOffice_ESP32/SmartOffice_ESP32.ino` bằng Arduino IDE.
+1. Mở `arduino/SmartOffice_ESP32/SmartOffice_ESP32.ino` bằng Arduino IDE.
 2. Cài thư viện **ArduinoJson** (v7) và **DHT sensor library** (Adafruit), chọn board *ESP32 Dev Module* (core 3.x).
 3. Sửa `WIFI_SSID` và `WIFI_PASS`, rồi nạp code. Mở Serial Monitor (115200) để xem IP.
 4. Trong app vào **Cá nhân → Kết nối ESP32**, nhập `http://<IP>`, bấm **Kiểm tra**, sau đó **Lưu & dùng**.
@@ -94,7 +98,7 @@ Wokwi trên web không cho điện thoại kết nối thẳng vào ESP32 ảo, 
 App (Expo Go / web) --wss:8884--> broker.hivemq.com <--tcp:1883-- ESP32 trên Wokwi
 ```
 
-1. Vào https://wokwi.com/projects/new/esp32 và chép 3 file trong `../arduino/SmartOffice_Wokwi/` (`sketch.ino`, `diagram.json`, `libraries.txt`) vào project.
+1. Vào https://wokwi.com/projects/new/esp32 và chép 3 file trong `arduino/SmartOffice_Wokwi/` (`sketch.ino`, `diagram.json`, `libraries.txt`) vào project.
 2. Bấm ▶. Đợi Serial in ra `MQTT da ket noi` (LCD hiện `MQTT: OK`).
 3. Trong app vào **Cá nhân → Kết nối ESP32 → chọn MQTT**. Topic mặc định `smartoffice/so-8f3k2q` phải trùng với `BASE` trong `sketch.ino`.
 4. Bật/tắt thiết bị trong app: LED, servo cửa/rèm trên Wokwi đổi theo. Bấm vào DHT22 hoặc biến trở gas/CO₂ trên Wokwi để đổi giá trị, app cập nhật theo.
