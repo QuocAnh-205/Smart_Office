@@ -10,6 +10,8 @@
       "supportsTablet": true
     },
     "android": {
+      "package": "vn.quocanh.smartoffice",
+      "versionCode": 1,
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -23,7 +25,27 @@
     "plugins": [
       "expo-router",
       "expo-status-bar",
-      "expo-font"
+      "expo-font",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
+      [
+        "expo-secure-store",
+        {
+          "faceIDPermission": "Cho phép $(PRODUCT_NAME) dùng Face ID để đăng nhập."
+        }
+      ],
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Cho phép $(PRODUCT_NAME) dùng Face ID để đăng nhập."
+        }
+      ]
     ],
     "scheme": "smartoffice"
   }

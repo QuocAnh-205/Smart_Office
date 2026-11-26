@@ -1,8 +1,9 @@
 // Cài đặt ứng dụng
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { router } from 'expo-router';
 import { Platform, Text } from 'react-native';
 import { Button, Card, Input, ListItem, Screen, Segmented, SwitchRow } from '../components/ui';
+import { useAuth } from '../context/AuthContext';
 import { useOffice } from '../context/OfficeContext';
 import { colors } from '../theme';
 import { confirmAction, showMessage } from '../utils/helpers';
@@ -11,6 +12,30 @@ export default function Settings() {
   const { settings, updateSettings, resetData, can, log } = useOffice();
   const admin = can('system.manage');
   const [pin, setPin] = useState('');
+  const { user, bioAccount, biometricStatus, enableBiometric, disableBiometric } = useAuth();
+  const [bio, setBio] = useState({ available: false, reason: null, label: 'Vân tay' });
+  useEffect(() => { biometricStatus().then(setBio); }, [biometricStatus]);
+  const bioOn = bioAccount?.id === user?.id;
+  const bioLabel = bio.label.toLowerCase();
+
+  const toggleBio = async (v) => {
+    try {
+      if (!v) {
+        await disableBiometric();
+        log(`Tắt đăng nhập bằng ${bioLabel}`, 'fingerprint-off');
+      } else if (await enableBiometric()) {
+        log(`Bật đăng nhập bằng ${bioLabel}`, 'fingerprint');
+        showMessage('Đã bật', `Lần sau mở app chỉ cần quét ${bioLabel} để đăng nhập ${user.email}.`);
+      }
+    } catch (err) {
+      showMessage('Chưa bật được', err.message);
+    }
+  };
+
+  const bioSubtitle = !bio.available ? bio.reason
+    : bioOn ? `Đang bật cho ${user.email} trên máy này`
+      : bioAccount ? `Đang gắn với ${bioAccount.email}; bật để chuyển sang tài khoản của bạn`
+        : 'Quét vân tay thay cho nhập mật khẩu (chỉ trên máy này)';
   const group = (t) => <Text style={{ fontSize: 13, fontWeight: '700', color: colors.muted, marginTop: 20, marginBottom: 8, marginLeft: 4 }}>{t}</Text>;
 
   const conn = settings.mockMode ? 'Đang dùng chế độ mô phỏng' : settings.transport === 'mqtt' ? `MQTT · ${settings.mqttTopic}` : settings.serverUrl;
@@ -51,6 +76,11 @@ export default function Settings() {
       </Card>
 
       {group('BẢO MẬT')}
+      <Card style={{ paddingVertical: 0, marginBottom: 12 }}>
+        <SwitchRow icon={bio.label === 'Khuôn mặt' ? 'face-recognition' : 'fingerprint'} iconColor={colors.primary}
+          title={`Đăng nhập bằng ${bioLabel}`} subtitle={bioSubtitle}
+          value={bioOn} onValueChange={bio.available || bioOn ? toggleBio : () => showMessage('Không dùng được', bio.reason)} last />
+      </Card>
       <Card>
         <Text style={{ fontWeight: '600', color: colors.text, marginBottom: 4 }}>Mã PIN mở khóa cửa</Text>
         <Text style={{ color: colors.muted, fontSize: 12, marginBottom: 10 }}>

@@ -30,6 +30,13 @@ Quy ước trạng thái: **Đạt**, **Không đạt**, **Chưa chạy**. Cột
 | AUTH-08 | Quên mật khẩu: OTP sai | Đã gửi yêu cầu cho `admin@office.vn` | Nhập 6 số khác mã demo | `000000` | Báo "Mã xác thực không đúng" | | Chưa chạy |
 | AUTH-09 | Quên mật khẩu: luồng đầy đủ | Như trên | Nhập đúng OTP demo → đặt mật khẩu mới → đăng nhập lại | Mật khẩu mới `111111` | Đăng nhập được bằng mật khẩu mới, mật khẩu cũ bị từ chối | | Chưa chạy |
 | AUTH-10 | Đổi mật khẩu sai mật khẩu cũ | Đã đăng nhập, vào Đổi mật khẩu | Nhập sai mật khẩu hiện tại | `999999` | Báo "Mật khẩu hiện tại không đúng" | | Chưa chạy |
+| AUTH-11 | Bật vân tay sau khi đăng nhập | Điện thoại đã đăng ký vân tay, chưa bật trong app | Đăng nhập bằng mật khẩu → chọn "Bật" → quét vân tay đã đăng ký | `nhanvien@office.vn` / `123456` | Vào Trang chủ; Cài đặt → Bảo mật hiện "Đang bật cho nhanvien@office.vn" | | Chưa chạy |
+| AUTH-12 | Đăng nhập bằng vân tay đúng | Đã làm AUTH-11, đã Đăng xuất | Bấm nút "Vân tay" → quét ngón đã đăng ký | Ngón đã đăng ký | Vào Trang chủ đúng tài khoản `nhanvien@office.vn` | | Chưa chạy |
+| AUTH-13 | Vân tay lạ | Như AUTH-12 | Bấm "Vân tay" → quét ngón chưa đăng ký trên máy | Ngón khác | Hộp thoại báo không khớp, không vào app; sai nhiều lần thì báo cảm biến tạm khóa | | Chưa chạy |
+| AUTH-14 | Hủy quét vân tay | Như AUTH-12 | Bấm "Vân tay" → bấm "Dùng mật khẩu" | — | Đóng hộp thoại, ở lại màn hình Đăng nhập, không báo lỗi | | Chưa chạy |
+| AUTH-15 | Mật khẩu bị đặt lại thì vân tay hết hiệu lực | Như AUTH-12 | Quên mật khẩu → đặt lại mật khẩu `nhanvien@office.vn` → bấm "Vân tay" → quét đúng ngón | Mật khẩu mới `222222` | Báo "Mật khẩu tài khoản đã thay đổi nên vân tay hết hiệu lực", không vào app | | Chưa chạy |
+| AUTH-16 | Chưa bật vân tay | App mới cài, chưa bật | Bấm nút "Vân tay" | — | Báo "Chưa bật đăng nhập bằng vân tay trên máy này..." | | Chưa chạy |
+| AUTH-17 | Máy không có / chưa đăng ký vân tay | Trình duyệt web hoặc máy chưa đăng ký vân tay | Bấm nút "Vân tay" | — | Báo lý do (web không hỗ trợ / chưa đăng ký vân tay trong Cài đặt điện thoại) | | Chưa chạy |
 
 ## 3. Phân quyền theo vai trò (ROLE)
 
@@ -116,13 +123,13 @@ Tiền điều kiện chung: mạch Wokwi đang chạy, Serial in `MQTT da ket n
 
 | Nhóm | Số ca | Đạt | Chưa chạy |
 |---|---|---|---|
-| AUTH: Xác thực | 10 | 0 | 10 |
+| AUTH: Xác thực | 17 | 0 | 17 |
 | ROLE: Phân quyền | 10 | 0 | 10 |
 | DEV: Điều khiển thiết bị | 8 | 6 | 2 |
 | PIN: Khóa cửa và PIN | 5 | 0 | 5 |
 | AUTO: Cảm biến và tự động hóa | 8 | 1 | 7 |
 | OFF: RFID, chấm công, phòng họp | 8 | 0 | 8 |
 | CONN: Kết nối MQTT | 8 | 2 | 6 |
-| **Tổng** | **57** | **9** | **48** |
+| **Tổng** | **64** | **9** | **55** |
 
 Các ca **Đạt** đã chạy ngày 25/11/2026 trên mạch Wokwi thật, qua broker HiveMQ (lệnh gửi từ máy tính và từ app trên điện thoại).

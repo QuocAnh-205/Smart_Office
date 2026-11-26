@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { check, ROLES } from '../utils/permissions';
+import { clearBiometricAccount, getBiometricAccount, getBiometricStatus, saveBiometricAccount, scanBiometric } from '../services/biometric';
 
 const AuthContext = createContext(null);
 
@@ -33,16 +34,25 @@ function mergeUsers(saved) {
 }
 
 export function AuthProvider({ children }) {
-  const [users, setUsers] = useState(DEFAULT_USERS);
-  const [user, setUser] = useState(null);
+  const [users, setUsersState] = useState(DEFAULT_USERS);
+  const usersRef = useRef(DEFAULT_USERS);
+  const setUsers = (l) => { usersRef.current = l; setUsersState(l); };
+  const [user, setUserState] = useState(null);
+  // Luôn giữ người dùng mới nhất: hàm gọi ngay sau login() vẫn thấy tài khoản vừa đăng nhập
+  // (state React chỉ cập nhật ở lần render sau)
+  const userRef = useRef(null);
+  const setUser = (u) => { userRef.current = u; setUserState(u); };
   const [onboarded, setOnboarded] = useState(false);
   const [ready, setReady] = useState(false);
   // false = không "Ghi nhớ đăng nhập": phiên chỉ giữ trong lần mở app này, không ghi xuống bộ nhớ
   const persistRef = useRef(true);
+  // Tài khoản gắn với vân tay trên máy này ({ id, email, name, pw }) hoặc null
+  const [bioAccount, setBioAccount] = useState(null);
 
   useEffect(() => {
     (async () => {
       try {
+        setBioAccount(await getBiometricAccount());
         const [u, s, o] = await AsyncStorage.multiGet([USERS_KEY, SESSION_KEY, ONBOARD_KEY]);
         const list = u[1] ? mergeUsers(JSON.parse(u[1])) : DEFAULT_USERS;
         setUsers(list);
@@ -64,8 +74,9 @@ export function AuthProvider({ children }) {
     setUsers(list);
     await AsyncStorage.setItem(USERS_KEY, JSON.stringify(list));
     // Đồng bộ phiên đăng nhập hiện tại nếu tài khoản của mình bị sửa
-    if (user) {
-      const me = list.find((x) => x.id === user.id);
+    const cur = userRef.current;
+    if (cur) {
+      const me = list.find((x) => x.id === cur.id);
       if (me) {
         setUser(me);
         if (persistRef.current) await AsyncStorage.setItem(SESSION_KEY, JSON.stringify({ id: me.id }));
@@ -115,13 +126,74 @@ export function AuthProvider({ children }) {
   const updateProfile = async (patch) => {
     // Người dùng tự sửa hồ sơ: không được tự đổi vai trò / thẻ
     const { role: _r, card: _c, ...safe } = patch;
-    const updated = { ...user, ...safe };
-    await saveUsers(users.map((u) => (u.id === user.id ? updated : u)));
+    const me = userRef.current;
+    if (!me) throw new Error('Bạn cần đăng nhập trước');
+    const updated = { ...me, ...safe };
+    await saveUsers(usersRef.current.map((u) => (u.id === me.id ? updated : u)));
   };
 
   const changePassword = async (oldPass, newPass) => {
-    if (user.password !== oldPass) throw new Error('Mật khẩu hiện tại không đúng');
+    const me = userRef.current;
+    if (!me) throw new Error('Bạn cần đăng nhập trước');
+    if (me.password !== oldPass) throw new Error('Mật khẩu hiện tại không đúng');
     await updateProfile({ password: newPass });
+    // Chính chủ đổi mật khẩu (đã chứng minh biết mật khẩu cũ) thì giữ vân tay, cập nhật dấu mật khẩu
+    const acc = await getBiometricAccount();
+    if (acc?.id === me.id) {
+      const next = { ...me, password: newPass };
+      await saveBiometricAccount(next);
+      setBioAccount(await getBiometricAccount());
+    }
+  };
+
+  // ---- Đăng nhập bằng vân tay ----
+  const biometricStatus = getBiometricStatus; // hàm cố định, dùng an toàn trong useEffect
+
+  const disableBiometric = async () => {
+    await clearBiometricAccount();
+    setBioAccount(null);
+  };
+
+  /** Bật vân tay cho tài khoản đang đăng nhập: phải quét đúng vân tay đã đăng ký trên máy */
+  const enableBiometric = async (account) => {
+    const me = account || userRef.current;
+    if (!me) throw new Error('Bạn cần đăng nhập trước');
+    const st = await getBiometricStatus();
+    if (!st.available) throw new Error(st.reason);
+    const r = await scanBiometric(`Quét ${st.label.toLowerCase()} để bật đăng nhập nhanh`);
+    if (!r.ok) {
+      if (r.error) throw new Error(r.error);
+      return false; // người dùng hủy
+    }
+    // Lấy bản mới nhất (có mật khẩu hiện tại) để làm dấu mật khẩu
+    await saveBiometricAccount(usersRef.current.find((u) => u.id === me.id) || me);
+    setBioAccount(await getBiometricAccount());
+    return true;
+  };
+
+  /**
+   * Đăng nhập bằng vân tay. Trả về user, hoặc null nếu người dùng hủy hộp thoại.
+   * Từ chối nếu tài khoản đã bị xóa hoặc mật khẩu đã bị đổi/đặt lại kể từ lúc bật vân tay.
+   */
+  const loginWithBiometric = async (remember = true) => {
+    const st = await getBiometricStatus();
+    if (!st.available) throw new Error(st.reason);
+    const acc = await getBiometricAccount();
+    if (!acc) throw new Error(`Chưa bật đăng nhập bằng ${st.label.toLowerCase()} trên máy này. Hãy đăng nhập bằng mật khẩu, rồi bật trong Cài đặt → Bảo mật.`);
+    const r = await scanBiometric(`Đăng nhập ${acc.email}`);
+    if (!r.ok) {
+      if (r.error) throw new Error(r.error);
+      return null;
+    }
+    const found = usersRef.current.find((u) => u.id === acc.id);
+    if (!found || found.password !== acc.pw) {
+      await disableBiometric();
+      throw new Error(found
+        ? 'Mật khẩu tài khoản đã thay đổi nên vân tay hết hiệu lực. Hãy đăng nhập bằng mật khẩu mới rồi bật lại.'
+        : 'Tài khoản gắn với vân tay không còn tồn tại.');
+    }
+    await saveSession(found, remember);
+    return found;
   };
 
   const emailExists = (email) => users.some((u) => sameEmail(u.email, email));
@@ -183,6 +255,7 @@ export function AuthProvider({ children }) {
       value={{
         user, users, ready, onboarded, finishOnboarding, login, register, logout, updateProfile, changePassword, emailExists, resetPassword,
         addMember, updateMember, removeMember,
+        bioAccount, biometricStatus, enableBiometric, disableBiometric, loginWithBiometric,
       }}
     >
       {children}
