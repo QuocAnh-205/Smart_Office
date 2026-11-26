@@ -658,6 +658,21 @@ export function OfficeProvider({ children }) {
 
   useEffect(() => { syncRef.current = syncFromBoard; }, [syncFromBoard]);
 
+  // Mỗi lần đổi chế độ / địa chỉ: chỉ Mô phỏng mới coi là "đã kết nối" ngay.
+  // HTTP / MQTT phải bắt đầu từ "chưa kết nối" và chỉ chuyển xanh khi mạch thật sự trả lời,
+  // tránh chấm xanh ảo kế thừa từ chế độ Mô phỏng (vd. Wi-Fi chặn cổng 8884).
+  const linkKey = settings.mockMode
+    ? 'mock'
+    : settings.transport === 'mqtt'
+      ? `mqtt|${settings.mqttUrl}|${settings.mqttTopic}`
+      : `http|${settings.serverUrl}`;
+  const [prevLinkKey, setPrevLinkKey] = useState(linkKey);
+  if (prevLinkKey !== linkKey) {
+    // Điều chỉnh state ngay trong lúc render (React khuyến nghị thay cho setState trong effect)
+    setPrevLinkKey(linkKey);
+    setConnected(linkKey === 'mock');
+  }
+
   useEffect(() => {
     if (!loaded || settings.mockMode || settings.transport !== 'http') return;
     eventSeq.current = 0;
@@ -668,34 +683,92 @@ export function OfficeProvider({ children }) {
   useEffect(() => {
     if (!loaded || settings.mockMode || settings.transport !== 'mqtt') return undefined;
     const base = settings.mqttTopic.replace(/\/$/, '');
-    // Gửi toàn bộ trạng thái thiết bị trong app xuống mạch để hai bên khớp nhau
-    const syncAll = () => {
-      devicesRef.current.forEach((d) => client.publish(`${base}/cmd/${d.id}`, JSON.stringify(pickSync(d))));
+
+    // "Đã kết nối" = broker đã CONNACK VÀ mạch ESP32 đang online (status/sensors).
+    // Chỉ mở được WebSocket hay chỉ nối được broker mà mạch tắt thì vẫn là chưa kết nối.
+    let disposed = false;
+    let brokerUp = false;
+    let boardOnline = false;
+    let lastBoardMsg = 0;
+    const BOARD_TIMEOUT = 20000; // mạch gửi cảm biến mỗi ~2s; 20s im lặng = coi như mất mạch
+    const refresh = () => { if (!disposed) setConnected(brokerUp && boardOnline); };
+    const markBoardAlive = () => {
+      lastBoardMsg = Date.now();
+      if (!boardOnline) { boardOnline = true; refresh(); }
     };
+    // LWT "offline" của broker có thể tới rất trễ (keep-alive 300s) -> tự phát hiện mạch im lặng
+    const watchdog = setInterval(() => {
+      if (boardOnline && Date.now() - lastBoardMsg > BOARD_TIMEOUT) { boardOnline = false; refresh(); }
+    }, 5000);
+
+    // Gửi toàn bộ trạng thái thiết bị xuống mạch, GIÃN CÁCH từng gói để không tràn bộ đệm ESP32.
+    // - Debounce: nhiều lần yêu cầu sát nhau (CONNACK + status retained + mạch khởi động lại) gộp thành 1 lần.
+    // - Mỗi gói đọc trạng thái MỚI NHẤT lúc gửi, nên lệnh người dùng bấm giữa chừng không bị ghi đè bởi dữ liệu cũ.
+    const SYNC_DEBOUNCE = 400;
+    const SYNC_GAP = 80;
+    let syncDebounce = null;
+    let syncTimer = null;
+    const stopSync = () => {
+      clearTimeout(syncDebounce);
+      clearTimeout(syncTimer);
+      syncDebounce = null;
+      syncTimer = null;
+    };
+    const runSync = () => {
+      const ids = devicesRef.current.map((d) => d.id);
+      let i = 0;
+      const step = () => {
+        syncTimer = null;
+        if (disposed || !client.connected) return;
+        while (i < ids.length) {
+          const d = devicesRef.current.find((x) => x.id === ids[i++]);
+          const body = d ? pickSync(d) : {};
+          if (Object.keys(body).length) {
+            client.publish(`${base}/cmd/${d.id}`, JSON.stringify(body));
+            break;
+          }
+        }
+        if (i < ids.length) syncTimer = setTimeout(step, SYNC_GAP);
+      };
+      step();
+    };
+    const scheduleSync = () => {
+      stopSync();
+      syncDebounce = setTimeout(() => { syncDebounce = null; runSync(); }, SYNC_DEBOUNCE);
+    };
+
     const client = createMqttClient({
       url: settings.mqttUrl,
       clientId: `so-app-${Math.random().toString(16).slice(2, 10)}`,
       onConnect: () => {
+        brokerUp = true;
+        boardOnline = false; // chờ status/sensors của mạch xác nhận
+        refresh();
         client.subscribe(`${base}/sensors`);
         client.subscribe(`${base}/status`);
         client.subscribe(`${base}/state/#`);
         client.subscribe(`${base}/rfid`);
-        syncAll();
+        // Không sync ở đây: status "online" (retain) sẽ tới ngay sau subscribe nếu mạch đang chạy
+        // và kích hoạt sync. Mạch offline thì gửi lệnh cũng mất (không retain) -> không cần gửi.
       },
       onMessage: (topic, msg) => {
         if (topic === `${base}/status`) {
-          setConnected(msg.startsWith('online'));
           if (msg.startsWith('online')) {
             setBoardInfo(msg.slice(7) || 'ESP32');
-            syncAll(); // mạch vừa (khởi động lại và) online -> gửi lại trạng thái hiện tại
+            markBoardAlive();
+            scheduleSync(); // mạch vừa (khởi động lại và) online -> gửi lại trạng thái hiện tại
+          } else {
+            boardOnline = false;
+            stopSync();
+            refresh();
           }
           return;
         }
         let data;
         try { data = JSON.parse(msg); } catch { return; }
+        markBoardAlive();
         if (topic === `${base}/sensors`) {
           fn.current.ingestSensors(data);
-          setConnected(true);
         } else if (topic.startsWith(`${base}/state/`)) {
           // Trạng thái do mạch tự thay đổi (quẹt thẻ mở cửa, công tắc cửa tủ đông...)
           const id = topic.slice(base.length + 7);
@@ -709,10 +782,18 @@ export function OfficeProvider({ children }) {
           fn.current.handleRfid(data.uid, { source: 'board', granted: !!data.granted });
         }
       },
-      onClose: () => setConnected(false),
+      onClose: () => {
+        brokerUp = false;
+        boardOnline = false;
+        stopSync();
+        refresh();
+      },
     });
     mqttRef.current = client;
     return () => {
+      disposed = true;
+      stopSync();
+      clearInterval(watchdog);
       client.end();
       mqttRef.current = null;
     };

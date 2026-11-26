@@ -88,12 +88,37 @@ WiFiClient net;
 PubSubClient mqtt(net);
 DHT dht(DHT_PIN, DHT22);
 Servo doorServo, curtainServo;
+
+// ====== PWM ======
+// ESP32 có 4 timer LEDC dùng chung cho mọi kênh PWM. Trộn ESP32Servo với analogWrite()/tone()
+// của core làm hai bên cấp phát kênh/timer độc lập -> giẫm lên nhau (servo đơ, đèn mất PWM,
+// còi đổi tần số kéo theo cả quạt). Vì vậy TẤT CẢ PWM đều đi qua ESP32PWM của ESP32Servo,
+// cấp phát timer tường minh, mỗi nhóm tần số một timer riêng:
+//   - 50 Hz   : servo cửa (13) + servo rèm (14)
+//   - 5 kHz   : đèn dimmer d1 (16), quạt d5 (2), quạt d6 (5)
+//   - còi (15): timer riêng vì tần số thay đổi liên tục (1000/1200/2000 Hz)
+const int PWM_FREQ = 5000;
+const int PWM_BITS = 8;     // duty 0-255
+const int BUZ_BITS = 10;
+const int BUZ_IDLE_HZ = 3000;  // tần số khởi tạo, khác mọi nhóm khác để còi luôn có timer riêng
+ESP32PWM pwmOut[3];          // d1, d5, d6
+ESP32PWM buzzer;
+ESP32PWM* pwmFor(int pin) {
+  for (int i = 0; i < 3; i++) if (pwmOut[i].attached() && pwmOut[i].getPin() == pin) return &pwmOut[i];
+  return nullptr;
+}
+void pwmWrite(int pin, int duty) {
+  ESP32PWM* p = pwmFor(pin);
+  if (p) p->write(constrain(duty, 0, 255));
+}
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
 String lastMsg = "";
 unsigned long lastMsgAt = 0, lastPub = 0, lastLcd = 0;
 unsigned long relockAt = 0;      // thời điểm tự khóa lại cửa chính sau khi quẹt thẻ
 unsigned long buzzerUntil = 0;   // còi báo động theo lệnh app
+unsigned long beepUntil = 0;     // tiếng bíp ngắn khi quẹt thẻ (không chặn loop)
+int beepHz = 0;
 float temp = 0, hum = 0;
 int gas = 0, lux = 0, co2 = 400;
 bool motion = false;
@@ -107,11 +132,11 @@ void apply(Device& d) {
       digitalWrite(d.pin, d.on ? HIGH : LOW);
       break;
     case DIMMER:
-      analogWrite(d.pin, d.on ? map(d.level, 0, 100, 0, 255) : 0);
+      pwmWrite(d.pin, d.on ? map(constrain(d.level, 0, 100), 0, 100, 0, 255) : 0);
       break;
     case FAN: {
       const int duty[] = { 0, 70, 160, 255 };
-      analogWrite(d.pin, d.on ? duty[constrain(d.level, 1, 3)] : 0);
+      pwmWrite(d.pin, d.on ? duty[constrain(d.level, 1, 3)] : 0);
       break;
     }
     case LOCK_SERVO:
@@ -121,7 +146,7 @@ void apply(Device& d) {
       digitalWrite(d.pin, d.on ? HIGH : LOW);
       break;
     case CURTAIN:
-      curtainServo.write(d.on ? map(d.level, 0, 100, 0, 180) : 0);
+      curtainServo.write(d.on ? map(constrain(d.level, 0, 100), 0, 100, 0, 180) : 0);
       break;
   }
 }
@@ -225,6 +250,26 @@ void connectMqtt() {
   }
 }
 
+// ---------- Còi (PWM trên timer riêng) ----------
+void updateBuzzer();
+void buzzerTone(int hz) {
+  static int curHz = -1;
+  if (hz == curHz) return;
+  curHz = hz;
+  if (hz <= 0) {
+    buzzer.write(0);
+  } else {
+    buzzer.writeTone(hz);                // chỉ đổi tần số timer của còi
+    buzzer.write(1 << (BUZ_BITS - 1));   // duty 50%
+  }
+}
+
+void beep(int hz, int ms) {
+  beepHz = hz;
+  beepUntil = millis() + ms;
+  updateBuzzer();
+}
+
 // ---------- RFID ----------
 void scanCard(const Card& c) {
   Device* door = findDevice("d10");
@@ -234,10 +279,10 @@ void scanCard(const Card& c) {
     apply(*door);
     relockAt = millis() + RFID_OPEN_MS;
     publishState("d10", "locked", false);
-    tone(BUZZER_PIN, 2000, 120);  // bíp ngắn: chấp nhận
+    beep(2000, 120);  // bíp ngắn: chấp nhận
     showMsg(String("Moi vao: ") + c.name);
   } else {
-    tone(BUZZER_PIN, 1200, 60);   // bíp nhẹ: chờ app xác nhận (app gửi lệnh mở nếu đủ quyền)
+    beep(1200, 60);   // bíp nhẹ: chờ app xác nhận (app gửi lệnh mở nếu đủ quyền)
     showMsg("Cho app xac nhan");
   }
   JsonDocument doc;
@@ -302,13 +347,12 @@ void readSensors() {
   motion = digitalRead(PIR_PIN) == HIGH;
 }
 
-// Còi: báo động gas tại chỗ (không cần app) hoặc theo lệnh app
+// Còi: báo động gas tại chỗ (không cần app) hoặc theo lệnh app; báo động ưu tiên hơn tiếng bíp
 void updateBuzzer() {
-  static bool sounding = false;
-  bool want = gas > 400 || millis() < buzzerUntil;
-  if (want && !sounding) tone(BUZZER_PIN, 1000);
-  if (!want && sounding) noTone(BUZZER_PIN);
-  sounding = want;
+  unsigned long now = millis();
+  bool alarm = gas > 400 || (long)(buzzerUntil - now) > 0;
+  bool beeping = (long)(beepUntil - now) > 0;
+  buzzerTone(alarm ? 1000 : beeping ? beepHz : 0);
 }
 
 void publishSensors() {
@@ -341,7 +385,6 @@ void drawLcd() {
 void setup() {
   Serial.begin(115200);
   pinMode(PIR_PIN, INPUT);
-  pinMode(BUZZER_PIN, OUTPUT);
   pinMode(RFID_BTN, INPUT_PULLUP);
   pinMode(FRIDGE_SW, INPUT);
   dht.begin();
@@ -349,12 +392,30 @@ void setup() {
   lcd.backlight();
   lcd.print("Smart Office");
 
-  doorServo.attach(13);
-  curtainServo.attach(14);
+  // Giao cả 4 timer LEDC cho ESP32Servo/ESP32PWM quản lý (không dùng analogWrite/tone của core nữa)
+  ESP32PWM::allocateTimer(0);
+  ESP32PWM::allocateTimer(1);
+  ESP32PWM::allocateTimer(2);
+  ESP32PWM::allocateTimer(3);
+
+  doorServo.setPeriodHertz(50);
+  curtainServo.setPeriodHertz(50);
+  doorServo.attach(13, 500, 2400);
+  curtainServo.attach(14, 500, 2400);
+
+  int k = 0;
   for (int i = 0; i < N; i++) {
-    if (devices[i].kind != LOCK_SERVO && devices[i].kind != CURTAIN) pinMode(devices[i].pin, OUTPUT);
-    apply(devices[i]);
+    Device& d = devices[i];
+    if (d.kind == DIMMER || d.kind == FAN) {
+      if (k < 3) pwmOut[k++].attachPin(d.pin, PWM_FREQ, PWM_BITS);
+    } else if (d.kind != LOCK_SERVO && d.kind != CURTAIN) {
+      pinMode(d.pin, OUTPUT);
+    }
   }
+  buzzer.attachPin(BUZZER_PIN, BUZ_IDLE_HZ, BUZ_BITS);
+  buzzer.write(0);
+
+  for (int i = 0; i < N; i++) apply(devices[i]);
 
   lcd.setCursor(0, 1);
   lcd.print("WiFi...");
@@ -375,7 +436,9 @@ void setup() {
 
 void loop() {
   if (!mqtt.connected()) connectMqtt();
-  mqtt.loop();
+  // PubSubClient chỉ xử lý 1 gói mỗi lần loop(): gọi vài lần để rút nhanh hàng đợi
+  // khi app đồng bộ nhiều lệnh liên tiếp, tránh đầy bộ đệm TCP của ESP32.
+  for (int i = 0; i < 8 && mqtt.connected(); i++) mqtt.loop();
 
   checkRfidButton();
   checkFridgeDoor();

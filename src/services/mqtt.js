@@ -70,9 +70,11 @@ export function createMqttClient({ url, clientId, onConnect, onMessage, onClose 
       // CONNACK
       if (data[1] === 0) {
         connected = true;
+        clearTimeout(connectTimer);
         onConnect?.();
       } else {
-        onClose?.(`Broker từ chối kết nối (mã ${data[1]})`);
+        // Broker từ chối: đóng socket để onclose báo lỗi và tự thử lại
+        try { ws?.close(); } catch { /* bỏ qua */ }
       }
     } else if (kind === 3) {
       // PUBLISH
@@ -102,10 +104,22 @@ export function createMqttClient({ url, clientId, onConnect, onMessage, onClose 
     }
   };
 
+  let connectTimer = null;
+
   const open = () => {
     buf = [];
+    connected = false;
     ws = new WebSocket(url, ['mqtt']);
     ws.binaryType = 'arraybuffer';
+    // Mạng chặn cổng (vd. 8884 trên Wi-Fi trường/ký túc xá) thường "treo" chứ không báo lỗi:
+    // quá 10s chưa có CONNACK thì chủ động đóng để onclose báo mất kết nối và thử lại.
+    const thisWs = ws;
+    clearTimeout(connectTimer);
+    connectTimer = setTimeout(() => {
+      if (!connected && ws === thisWs) {
+        try { thisWs.close(); } catch { /* bỏ qua */ }
+      }
+    }, 10000);
     ws.onopen = () => {
       // CONNECT: giao thức MQTT v3.1.1, clean session, keep-alive 60 giây
       send(packet(0x10, [...str('MQTT'), 4, 0x02, 0, 60, ...str(clientId)]));
@@ -117,9 +131,12 @@ export function createMqttClient({ url, clientId, onConnect, onMessage, onClose 
     };
     ws.onerror = () => {};
     ws.onclose = () => {
+      if (ws !== thisWs) return; // socket cũ đã bị thay thế
       clearInterval(ping);
+      clearTimeout(connectTimer);
       connected = false;
       onClose?.('Mất kết nối broker');
+      clearTimeout(retry);
       if (!closedByUser) retry = setTimeout(open, 3000); // tự kết nối lại
     };
   };
@@ -140,6 +157,7 @@ export function createMqttClient({ url, clientId, onConnect, onMessage, onClose 
     end() {
       closedByUser = true;
       clearTimeout(retry);
+      clearTimeout(connectTimer);
       clearInterval(ping);
       try {
         send(new Uint8Array([0xe0, 0])); // DISCONNECT
