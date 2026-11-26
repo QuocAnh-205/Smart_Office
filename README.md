@@ -2,6 +2,15 @@
 
 Ứng dụng di động điều khiển văn phòng thông minh dùng Arduino/ESP32. Ứng dụng chạy ngay ở **chế độ mô phỏng**, không cần phần cứng. Khi có ESP32 thì chỉ cần nhập địa chỉ IP là app điều khiển được thiết bị thật.
 
+## Link sản phẩm
+
+| Hạng mục | Link |
+|---|---|
+| Mã nguồn (GitHub) | https://github.com/QuocAnh-205/Smart_Office |
+| Mạch mô phỏng Wokwi | https://wokwi.com/projects/481734543830733825 |
+| Tài liệu API (REST + MQTT) | [docs/API.md](docs/API.md) |
+| Thiết kế ca kiểm thử | [docs/TEST_CASES.md](docs/TEST_CASES.md) |
+
 ## Chạy ứng dụng
 
 ```bash
